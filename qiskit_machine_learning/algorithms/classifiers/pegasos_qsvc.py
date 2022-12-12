@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2021.
+# (C) Copyright IBM 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,32 +11,37 @@
 # that they have been altered from the originals.
 
 """Pegasos Quantum Support Vector Classifier."""
+from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Tuple
+from typing import Dict
 
 import numpy as np
 from qiskit.utils import algorithm_globals
-from sklearn.svm import SVC
+from sklearn.base import ClassifierMixin
 
-from qiskit_machine_learning.exceptions import QiskitMachineLearningError
-from qiskit_machine_learning.kernels.quantum_kernel import QuantumKernel
+from ...algorithms.serializable_model import SerializableModelMixin
+from ...exceptions import QiskitMachineLearningError
+from ...kernels import BaseKernel, FidelityQuantumKernel
+
 
 logger = logging.getLogger(__name__)
 
 
-class PegasosQSVC(SVC):
-    """
-    This class implements Pegasos Quantum Support Vector Classifier algorithm developed in [1]
-    and includes overridden methods ``fit`` and ``predict`` from the ``SVC`` super-class. This
-    implementation is adapted to work with quantum kernels.
+class PegasosQSVC(ClassifierMixin, SerializableModelMixin):
+    r"""
+    Implements Pegasos Quantum Support Vector Classifier algorithm. The algorithm has been
+    developed in [1] and includes methods ``fit``, ``predict`` and ``decision_function`` following
+    the signatures
+    of `sklearn.svm.SVC <https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html>`_.
+    This implementation is adapted to work with quantum kernels.
 
     **Example**
 
     .. code-block:: python
 
-        quantum_kernel = QuantumKernel()
+        quantum_kernel = FidelityQuantumKernel()
 
         pegasos_qsvc = PegasosQSVC(quantum_kernel=quantum_kernel)
         pegasos_qsvc.fit(sample_train, label_train)
@@ -51,17 +56,18 @@ class PegasosQSVC(SVC):
     FITTED = 0
     UNFITTED = 1
 
+    # pylint: disable=invalid-name
     def __init__(
         self,
-        quantum_kernel: Optional[QuantumKernel] = None,
+        quantum_kernel: BaseKernel | None = None,
         C: float = 1.0,
         num_steps: int = 1000,
         precomputed: bool = False,
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ) -> None:
         """
         Args:
-            quantum_kernel: QuantumKernel to be used for classification. Has to be ``None`` when
+            quantum_kernel: a quantum kernel to be used for classification. Has to be ``None`` when
                 a precomputed kernel is used.
             C: Positive regularization parameter. The strength of the regularization is inversely
                 proportional to C. Smaller ``C`` induce smaller weights which generally helps
@@ -82,18 +88,16 @@ class PegasosQSVC(SVC):
                 - if ``quantum_kernel`` is passed and ``precomputed`` is set to ``True``. To use
                 a precomputed kernel, ``quantum_kernel`` has to be of the ``None`` type.
             TypeError:
-                - if ``quantum_instance`` neither instance of ``QuantumKernel`` nor ``None``.
+                - if ``quantum_kernel`` neither instance of
+                  :class:`~qiskit_machine_learning.kernels.BaseKernel` nor ``None``.
         """
-        super().__init__(C=C)
 
         if precomputed:
             if quantum_kernel is not None:
                 raise ValueError("'quantum_kernel' has to be None to use a precomputed kernel")
         else:
             if quantum_kernel is None:
-                quantum_kernel = QuantumKernel()
-            elif not isinstance(quantum_kernel, QuantumKernel):
-                raise TypeError("'quantum_kernel' has to be of type None or QuantumKernel")
+                quantum_kernel = FidelityQuantumKernel()
 
         self._quantum_kernel = quantum_kernel
         self._precomputed = precomputed
@@ -101,14 +105,19 @@ class PegasosQSVC(SVC):
         if seed is not None:
             algorithm_globals.random_seed = seed
 
+        if C > 0:
+            self.C = C
+        else:
+            raise ValueError(f"C has to be a positive number, found {C}.")
+
         # these are the parameters being fit and are needed for prediction
-        self._alphas: Optional[Dict[int, int]] = None
-        self._x_train: Optional[np.ndarray] = None
-        self._n_samples: Optional[int] = None
-        self._y_train: Optional[np.ndarray] = None
-        self._label_map: Optional[Dict[int, int]] = None
-        self._label_pos: Optional[int] = None
-        self._label_neg: Optional[int] = None
+        self._alphas: Dict[int, int] | None = None
+        self._x_train: np.ndarray | None = None
+        self._n_samples: int | None = None
+        self._y_train: np.ndarray | None = None
+        self._label_map: Dict[int, int] | None = None
+        self._label_pos: int | None = None
+        self._label_neg: int | None = None
 
         # added to all kernel values to include an implicit bias to the hyperplane
         self._kernel_offset = 1
@@ -118,12 +127,13 @@ class PegasosQSVC(SVC):
 
     # pylint: disable=invalid-name
     def fit(
-        self, X: np.ndarray, y: np.ndarray, sample_weight: Optional[np.ndarray] = None
+        self, X: np.ndarray, y: np.ndarray, sample_weight: np.ndarray | None = None
     ) -> "PegasosQSVC":
         """Fit the model according to the given training data.
 
         Args:
-            X: Train features. For a callable kernel (an instance of ``QuantumKernel``) the shape
+            X: Train features. For a callable kernel (an instance of
+               :class:`~qiskit_machine_learning.kernels.BaseKernel`) the shape
                should be ``(n_samples, n_features)``, for a precomputed kernel the shape should be
                ``(n_samples, n_samples)``.
             y: shape (n_samples), train labels . Must not contain more than two unique labels.
@@ -199,7 +209,8 @@ class PegasosQSVC(SVC):
         Perform classification on samples in X.
 
         Args:
-            X: Features. For a callable kernel (an instance of ``QuantumKernel``) the shape
+            X: Features. For a callable kernel (an instance of
+               :class:`~qiskit_machine_learning.kernels.BaseKernel`) the shape
                should be ``(m_samples, n_features)``, for a precomputed kernel the shape should be
                ``(m_samples, n_samples)``. Where ``m`` denotes the set to be predicted and ``n`` the
                size of the training set. In that case, the kernel values in X have to be calculated
@@ -214,6 +225,35 @@ class PegasosQSVC(SVC):
             ValueError:
                 - Pre-computed kernel matrix has the wrong shape and/or dimension.
         """
+
+        t_0 = datetime.now()
+        values = self.decision_function(X)
+        y = np.array([self._label_pos if val > 0 else self._label_neg for val in values])
+        logger.debug("prediction completed after %s", str(datetime.now() - t_0)[:-7])
+
+        return y
+
+    def decision_function(self, X: np.ndarray) -> np.ndarray:
+        """
+        Evaluate the decision function for the samples in X.
+
+        Args:
+            X: Features. For a callable kernel (an instance of
+               :class:`~qiskit_machine_learning.kernels.BaseKernel`) the shape
+               should be ``(m_samples, n_features)``, for a precomputed kernel the shape should be
+               ``(m_samples, n_samples)``. Where ``m`` denotes the set to be predicted and ``n`` the
+               size of the training set. In that case, the kernel values in X have to be calculated
+               with respect to the elements of the set to be predicted and the training set.
+
+        Returns:
+            An array of the shape (n_samples), the decision function of the sample.
+
+        Raises:
+            QiskitMachineLearningError:
+                - the method is called before the model has been fit.
+            ValueError:
+                - Pre-computed kernel matrix has the wrong shape and/or dimension.
+        """
         if self.fit_status_ == PegasosQSVC.UNFITTED:
             raise QiskitMachineLearningError("The PegasosQSVC has to be fit first")
         if np.ndim(X) != 2:
@@ -223,19 +263,11 @@ class PegasosQSVC(SVC):
                 "For a precomputed kernel, X should be in shape (m_samples, n_samples)"
             )
 
-        t_0 = datetime.now()
-        y = np.zeros(X.shape[0])
+        values = np.zeros(X.shape[0])
         for i in range(X.shape[0]):
-            value = self._compute_weighted_kernel_sum(i, X, training=False)
+            values[i] = self._compute_weighted_kernel_sum(i, X, training=False)
 
-            if value > 0:
-                y[i] = self._label_pos
-            else:
-                y[i] = self._label_neg
-
-        logger.debug("prediction completed after %s", str(datetime.now() - t_0)[:-7])
-
-        return y
+        return values
 
     def _compute_weighted_kernel_sum(self, index: int, X: np.ndarray, training: bool) -> float:
         """Helper function to compute the weighted sum over support vectors used for both training
@@ -249,48 +281,38 @@ class PegasosQSVC(SVC):
         Returns:
             Weighted sum of kernel evaluations employed in the Pegasos algorithm
         """
-        kernel: Dict[Tuple, np.ndarray] = {}
+        # non-zero indices corresponding to the support vectors
+        support_indices = list(self._alphas.keys())
+
+        # for training
+        if training:
+            # support vectors
+            x_supp = X[support_indices]
+        # for prediction
+        else:
+            x_supp = self._x_train[support_indices]
+        if not self._precomputed:
+            # evaluate kernel function only for the fixed datum and the support vectors
+            kernel = self._quantum_kernel.evaluate(X[index], x_supp) + self._kernel_offset
+        else:
+            kernel = X[index, support_indices]
+
+        # map the training labels of the support vectors to {-1,1}
+        y = np.array(list(map(self._label_map.get, self._y_train[support_indices])))
+        # weights for the support vectors
+        alphas = np.array(list(self._alphas.values()))
         # this value corresponds to a sum of kernel values weighted by their labels and alphas
-        value = 0.0
-        # only loop over the non zero alphas (preliminary support vectors)
-        for j in self._alphas:
-            # perform the kernel evaluations on the fly, as intended
-            if not self._precomputed:
-                # for training
-                if training:
-                    x_j = X[j]
-                # for prediction
-                else:
-                    x_j = self._x_train[j]
-
-                # evaluate kernel function only for the fixed datum and the data with non zero alpha
-                kernel[(index, j)] = kernel.get(
-                    (index, j), self._quantum_kernel.evaluate(X[index], x_j)
-                )
-                kernel_value = kernel[(index, j)]
-
-            # consider a precomputed kernel
-            else:
-                kernel_value = X[index, j]
-
-            value += (
-                # alpha weights the contribution of the associated datum
-                self._alphas[j]
-                # the class membership labels have to be in {-1, +1}
-                * self._label_map[self._y_train[j]]
-                # the offset to the kernel function leads to an implicit bias term
-                * (kernel_value + self._kernel_offset)
-            )
+        value = np.sum(alphas * y * kernel)
 
         return value
 
     @property
-    def quantum_kernel(self) -> QuantumKernel:
+    def quantum_kernel(self) -> BaseKernel:
         """Returns quantum kernel"""
         return self._quantum_kernel
 
     @quantum_kernel.setter
-    def quantum_kernel(self, quantum_kernel: QuantumKernel):
+    def quantum_kernel(self, quantum_kernel: BaseKernel):
         """
         Sets quantum kernel. If previously a precomputed kernel was set, it is reset to ``False``.
         """
@@ -323,14 +345,15 @@ class PegasosQSVC(SVC):
     @precomputed.setter
     def precomputed(self, precomputed: bool):
         """Sets the pre-computed kernel flag. If ``True`` is passed then the previous kernel is
-        cleared. If ``False`` is passed then a new instance of ``QuantumKernel`` is created."""
+        cleared. If ``False`` is passed then a new instance of
+        :class:`~qiskit_machine_learning.kernels.FidelityQuantumKernel` is created."""
         self._precomputed = precomputed
         if precomputed:
             # remove the kernel, a precomputed will
             self._quantum_kernel = None
         else:
             # re-create a new default quantum kernel
-            self._quantum_kernel = QuantumKernel()
+            self._quantum_kernel = FidelityQuantumKernel()
 
         # reset training status
         self._reset_state()

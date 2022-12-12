@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2021.
+# (C) Copyright IBM 2021, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -17,18 +17,20 @@ from typing import Optional
 
 from sklearn.svm import SVR
 
-from ...exceptions import QiskitMachineLearningWarning
-from ...kernels.quantum_kernel import QuantumKernel
+from qiskit_machine_learning.algorithms.serializable_model import SerializableModelMixin
+from qiskit_machine_learning.exceptions import QiskitMachineLearningWarning
+from qiskit_machine_learning.kernels import BaseKernel, FidelityQuantumKernel
 
 
-class QSVR(SVR):
-    r"""Quantum Support Vector Regressor.
+class QSVR(SVR, SerializableModelMixin):
+    r"""Quantum Support Vector Regressor that extends the scikit-learn
+    `sklearn.svm.SVR <https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVR.html>`_
+    regressor and introduces an additional `quantum_kernel` parameter.
 
-    This class shows how to use a quantum kernel for regression. The class extends
-    `sklearn.svm.SVR <https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVR.html>`_,
-    and thus inherits its methods like ``fit`` and ``predict`` used in the example below.
+    This class shows how to use a quantum kernel for regression. The class inherits its methods
+    like ``fit`` and ``predict`` from scikit-learn, see the example below.
     Read more in the
-    `sklearn user guide <https://scikit-learn.org/stable/modules/svm.html#svm-regression>`_.
+    `scikit-learn user guide <https://scikit-learn.org/stable/modules/svm.html#svm-regression>`_.
 
     **Example**
 
@@ -39,21 +41,13 @@ class QSVR(SVR):
         qsvr.predict(sample_test)
     """
 
-    def __init__(self, *args, quantum_kernel: Optional[QuantumKernel] = None, **kwargs):
+    def __init__(self, *, quantum_kernel: Optional[BaseKernel] = None, **kwargs):
         """
         Args:
-            quantum_kernel: QuantumKernel to be used for regression.
+            quantum_kernel: Quantum kernel to be used for regression.
             *args: Variable length argument list to pass to SVR constructor.
             **kwargs: Arbitrary keyword arguments to pass to SVR constructor.
         """
-        if (len(args)) != 0:
-            msg = (
-                f"Positional arguments ({args}) are deprecated as of version 0.3.0 and "
-                f"will be removed no sooner than 3 months after the release. Instead use "
-                f"keyword arguments."
-            )
-            warnings.warn(msg, DeprecationWarning, stacklevel=2)
-
         if "kernel" in kwargs:
             msg = (
                 "'kernel' argument is not supported and will be discarded, "
@@ -63,17 +57,17 @@ class QSVR(SVR):
             # if we don't delete, then this value clashes with our quantum kernel
             del kwargs["kernel"]
 
-        self._quantum_kernel = quantum_kernel if quantum_kernel else QuantumKernel()
+        self._quantum_kernel = quantum_kernel if quantum_kernel else FidelityQuantumKernel()
 
-        super().__init__(kernel=self._quantum_kernel.evaluate, *args, **kwargs)
+        super().__init__(kernel=self._quantum_kernel.evaluate, **kwargs)
 
     @property
-    def quantum_kernel(self) -> QuantumKernel:
+    def quantum_kernel(self) -> BaseKernel:
         """Returns quantum kernel"""
         return self._quantum_kernel
 
     @quantum_kernel.setter
-    def quantum_kernel(self, quantum_kernel: QuantumKernel):
+    def quantum_kernel(self, quantum_kernel: BaseKernel):
         """Sets quantum kernel"""
         self._quantum_kernel = quantum_kernel
         self.kernel = self._quantum_kernel.evaluate

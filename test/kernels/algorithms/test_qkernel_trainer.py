@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2021.
+# (C) Copyright IBM 2021, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,6 +11,7 @@
 # that they have been altered from the originals.
 
 """ Test QuantumKernelTrainer """
+import warnings
 
 from test import QiskitMachineLearningTestCase
 
@@ -18,8 +19,7 @@ import unittest
 
 import numpy as np
 
-from qiskit.providers.aer import AerSimulator
-from qiskit.utils.algorithm_globals import algorithm_globals
+from qiskit.utils import algorithm_globals, optionals
 from qiskit.circuit.library import ZZFeatureMap
 from qiskit.algorithms.optimizers import COBYLA
 from qiskit_machine_learning.kernels import QuantumKernel
@@ -31,20 +31,23 @@ from qiskit_machine_learning.algorithms.classifiers import QSVC
 class TestQuantumKernelTrainer(QiskitMachineLearningTestCase):
     """Test QuantumKernelTrainer Algorithm"""
 
+    @unittest.skipUnless(optionals.HAS_AER, "qiskit-aer is required to run this test")
     def setUp(self):
         super().setUp()
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
         algorithm_globals.random_seed = 10598
         self.optimizer = COBYLA(maxiter=25)
+        # pylint: disable=no-member
+        from qiskit_aer import AerSimulator
+
         self.backend = AerSimulator(method="statevector")
         data_block = ZZFeatureMap(2)
-        trainable_block = ZZFeatureMap(2)
-        user_parameters = trainable_block.parameters
-
-        for i, _ in enumerate(user_parameters):
-            user_parameters[i]._name = f"θ[{i}]"
+        trainable_block = ZZFeatureMap(2, parameter_prefix="θ")
+        training_parameters = trainable_block.parameters
 
         self.feature_map = data_block.compose(trainable_block).compose(data_block)
-        self.user_parameters = user_parameters
+        self.training_parameters = training_parameters
 
         self.sample_train = np.asarray(
             [
@@ -61,9 +64,14 @@ class TestQuantumKernelTrainer(QiskitMachineLearningTestCase):
 
         self.quantum_kernel = QuantumKernel(
             feature_map=self.feature_map,
-            user_parameters=self.user_parameters,
+            training_parameters=self.training_parameters,
             quantum_instance=self.backend,
         )
+
+    def tearDown(self) -> None:
+        super().tearDown()
+        warnings.filterwarnings("always", category=DeprecationWarning)
+        warnings.filterwarnings("always", category=PendingDeprecationWarning)
 
     def test_qkt(self):
         """Test QuantumKernelTrainer"""
@@ -83,7 +91,7 @@ class TestQuantumKernelTrainer(QiskitMachineLearningTestCase):
             qkt_result = qkt.fit(self.sample_train, self.label_train)
 
             # Ensure user parameters are bound to real values
-            self.assertEqual(len(qkt_result.quantum_kernel.get_unbound_user_parameters()), 0)
+            self.assertEqual(len(qkt_result.quantum_kernel.get_unbound_training_parameters()), 0)
 
             # Ensure kernel training functions and is deterministic
             qsvc = QSVC(quantum_kernel=qkt_result.quantum_kernel)

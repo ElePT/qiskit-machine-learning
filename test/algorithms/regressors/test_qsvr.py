@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2021.
+# (C) Copyright IBM 2021, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,8 +11,11 @@
 # that they have been altered from the originals.
 
 """ Test QSVR """
-
+import os
+import tempfile
 import unittest
+import warnings
+
 from test import QiskitMachineLearningTestCase
 
 import numpy as np
@@ -20,7 +23,7 @@ import numpy as np
 from qiskit import BasicAer
 from qiskit.circuit.library import ZZFeatureMap
 from qiskit.utils import QuantumInstance, algorithm_globals
-from qiskit_machine_learning.algorithms import QSVR
+from qiskit_machine_learning.algorithms import QSVR, SerializableModelMixin
 from qiskit_machine_learning.exceptions import (
     QiskitMachineLearningError,
     QiskitMachineLearningWarning,
@@ -33,6 +36,7 @@ class TestQSVR(QiskitMachineLearningTestCase):
 
     def setUp(self):
         super().setUp()
+        warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
 
         algorithm_globals.random_seed = 10598
 
@@ -57,6 +61,10 @@ class TestQSVR(QiskitMachineLearningTestCase):
 
         self.sample_test = np.asarray([[2.199114860, 5.15221195], [0.50265482, 0.06283185]])
         self.label_test = np.asarray([0, 1])
+
+    def tearDown(self) -> None:
+        super().tearDown()
+        warnings.filterwarnings("always", category=PendingDeprecationWarning)
 
     def test_qsvr(self):
         """Test QSVR"""
@@ -113,6 +121,42 @@ class TestQSVR(QiskitMachineLearningTestCase):
         """Test QSVC with the `kernel` argument."""
         with self.assertWarns(QiskitMachineLearningWarning):
             QSVR(kernel=1)
+
+    def test_save_load(self):
+        """Tests save and load models."""
+        features = np.array([[0, 0], [0.1, 0.1], [0.4, 0.4], [1, 1]])
+        labels = np.array([0, 0.1, 0.4, 1])
+
+        quantum_kernel = QuantumKernel(
+            feature_map=ZZFeatureMap(2), quantum_instance=self.statevector_simulator
+        )
+        regressor = QSVR(quantum_kernel=quantum_kernel)
+        regressor.fit(features, labels)
+
+        # predicted labels from the newly trained model
+        test_features = np.array([[0.5, 0.5]])
+        original_predicts = regressor.predict(test_features)
+
+        # save/load, change the quantum instance and check if predicted values are the same
+        file_name = os.path.join(tempfile.gettempdir(), "qsvr.model")
+        regressor.save(file_name)
+        try:
+            regressor_load = QSVR.load(file_name)
+            loaded_model_predicts = regressor_load.predict(test_features)
+
+            np.testing.assert_array_almost_equal(original_predicts, loaded_model_predicts)
+
+            # test loading warning
+            class FakeModel(SerializableModelMixin):
+                """Fake model class for test purposes."""
+
+                pass
+
+            with self.assertRaises(TypeError):
+                FakeModel.load(file_name)
+
+        finally:
+            os.remove(file_name)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2021.
+# (C) Copyright IBM 2021, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -17,9 +17,14 @@ from typing import Optional, Union
 
 import numpy as np
 
-try:
+import qiskit_machine_learning.optionals as _optionals
+from qiskit_machine_learning.neural_networks import NeuralNetwork
+from qiskit_machine_learning.utils.loss_functions import Loss
+
+if _optionals.HAS_SPARSE:
+    # pylint: disable=import-error
     from sparse import SparseArray
-except ImportError:
+else:
 
     class SparseArray:  # type: ignore
         """Empty SparseArray class
@@ -27,10 +32,6 @@ except ImportError:
         """
 
         pass
-
-
-from qiskit_machine_learning.neural_networks import NeuralNetwork
-from qiskit_machine_learning.utils.loss_functions import Loss
 
 
 class ObjectiveFunction:
@@ -51,6 +52,7 @@ class ObjectiveFunction:
         """
         super().__init__()
         self._X = X
+        self._num_samples = X.shape[0]
         self._y = y
         self._neural_network = neural_network
         self._loss = loss
@@ -105,15 +107,15 @@ class ObjectiveFunction:
 
 
 class BinaryObjectiveFunction(ObjectiveFunction):
-    """An objective function for binary representation of the output,
-    e.g. classes of ``-1`` and ``+1``."""
+    """An objective function for binary representation of the output. For instance, classes of
+    ``-1`` and ``+1``."""
 
     def objective(self, weights: np.ndarray) -> float:
         # predict is of shape (N, 1), where N is a number of samples
         predict = self._neural_network_forward(weights)
         target = np.array(self._y).reshape(predict.shape)
         # float(...) is for mypy compliance
-        return float(np.sum(self._loss(predict, target)))
+        return float(np.sum(self._loss(predict, target)) / self._num_samples)
 
     def gradient(self, weights: np.ndarray) -> np.ndarray:
         # check that we have supported output shape
@@ -134,15 +136,15 @@ class BinaryObjectiveFunction(ObjectiveFunction):
         # and weights for this output.
         grad = loss_gradient[:, 0] @ weight_grad[:, 0, :]
         # we keep the shape of (1, num_weights)
-        grad = grad.reshape(1, -1)
+        grad = grad.reshape(1, -1) / self._num_samples
 
         return grad
 
 
 class MultiClassObjectiveFunction(ObjectiveFunction):
     """
-    An objective function for multiclass representation of the output,
-    e.g. classes of ``0``, ``1``, ``2``, etc.
+    An objective function for multiclass representation of the output. For instance, classes of
+    ``0``, ``1``, ``2``, etc.
     """
 
     def objective(self, weights: np.ndarray) -> float:
@@ -158,6 +160,7 @@ class MultiClassObjectiveFunction(ObjectiveFunction):
             # loss vector is a loss of a particular output value(value of i) versus true labels.
             # we do this across all samples.
             val += probs[:, i] @ self._loss(np.full(num_samples, i), self._y)
+        val = val / self._num_samples
 
         return val
 
@@ -173,20 +176,22 @@ class MultiClassObjectiveFunction(ObjectiveFunction):
             # weight probability gradients and a loss vector.
             grad += weight_prob_grad[:, i, :].T @ self._loss(np.full(num_samples, i), self._y)
 
+        grad = grad / self._num_samples
         return grad
 
 
 class OneHotObjectiveFunction(ObjectiveFunction):
     """
-    An objective function for one hot encoding representation of the output,
-    e.g. classes like ``[1, 0, 0]``, ``[0, 1, 0]``, ``[0, 0, 1]``.
+    An objective function for one hot encoding representation of the output. For instance, classes
+    like ``[1, 0, 0]``, ``[0, 1, 0]``, ``[0, 0, 1]``.
     """
 
     def objective(self, weights: np.ndarray) -> float:
         # probabilities is of shape (N, num_outputs)
         probs = self._neural_network_forward(weights)
         # float(...) is for mypy compliance
-        return float(np.sum(self._loss(probs, self._y)))
+        value = float(np.sum(self._loss(probs, self._y)) / self._num_samples)
+        return value
 
     def gradient(self, weights: np.ndarray) -> np.ndarray:
         # predict is of shape (N, num_outputs)
@@ -203,4 +208,5 @@ class OneHotObjectiveFunction(ObjectiveFunction):
             # samples for an output.
             grad += loss_gradient[:, i] @ weight_prob_grad[:, i, :]
 
+        grad = grad / self._num_samples
         return grad

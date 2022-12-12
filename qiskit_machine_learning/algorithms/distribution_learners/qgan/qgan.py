@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2019, 2021.
+# (C) Copyright IBM 2019, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -22,12 +22,13 @@ import numpy as np
 from scipy.stats import entropy
 
 from qiskit.circuit import QuantumCircuit
-from qiskit.providers import Backend, BaseBackend
+from qiskit.providers import Backend
 from qiskit.utils import QuantumInstance, algorithm_globals
 from qiskit.algorithms.optimizers import Optimizer
 from qiskit.opflow.gradients import Gradient
 from qiskit.utils.validation import validate_min
 from ....datasets.dataset_helper import discretize_and_truncate
+from ....deprecation import deprecate_function
 from ....exceptions import QiskitMachineLearningError
 from .discriminative_network import DiscriminativeNetwork
 from .generative_network import GenerativeNetwork
@@ -63,6 +64,12 @@ class QGAN:
         <https://www.nature.com/articles/s41534-019-0223-2>`_
     """
 
+    @deprecate_function(
+        "0.5.0",
+        additional_msg="with no direct replacement for it. "
+        "Instead, please refer to the new QGAN tutorial",
+        stack_level=3,
+    )
     def __init__(
         self,
         data: Union[np.ndarray, List],
@@ -75,7 +82,8 @@ class QGAN:
         generator: Optional[GenerativeNetwork] = None,
         tol_rel_ent: Optional[float] = None,
         snapshot_dir: Optional[str] = None,
-        quantum_instance: Optional[Union[QuantumInstance, BaseBackend, Backend]] = None,
+        quantum_instance: Optional[Union[QuantumInstance, Backend]] = None,
+        penalty: Optional[bool] = False,
     ) -> None:
         """
 
@@ -96,6 +104,7 @@ class QGAN:
             snapshot_dir: Directory in to which to store cvs file with parameters,
                 if None (default) then no cvs file is created.
             quantum_instance: Quantum Instance or Backend
+            penalty : enable or not the gradient penalty in the discriminator
         Raises:
             QiskitMachineLearningError: invalid input
         """
@@ -110,8 +119,8 @@ class QGAN:
             bounds_min = np.percentile(self._data, 5, axis=0)
             bounds_max = np.percentile(self._data, 95, axis=0)
             bounds = []
-            for i, _ in enumerate(bounds_min):
-                bounds.append([bounds_min[i], bounds_max[i]])
+            for i, bound_min in enumerate(bounds_min):
+                bounds.append([bound_min, bounds_max[i]])
         if np.ndim(data) > 1:
             if len(bounds) != (len(num_qubits) or len(data[0])):
                 raise QiskitMachineLearningError(
@@ -155,6 +164,7 @@ class QGAN:
         self._d_loss = []  # type: List[float]
         self._rel_entr = []  # type: List[float]
         self._tol_rel_ent = tol_rel_ent
+        self._penalty = penalty
 
         self._random_seed = seed
 
@@ -178,7 +188,7 @@ class QGAN:
 
     def run(
         self,
-        quantum_instance: Optional[Union[QuantumInstance, Backend, BaseBackend]] = None,
+        quantum_instance: Optional[Union[QuantumInstance, Backend]] = None,
         **kwargs,
     ) -> Dict:
         """Execute the algorithm with selected backend.
@@ -195,7 +205,7 @@ class QGAN:
             raise QiskitMachineLearningError(
                 "A QuantumInstance or Backend must be supplied to run the quantum algorithm."
             )
-        if isinstance(quantum_instance, (BaseBackend, Backend)):
+        if isinstance(quantum_instance, Backend):
             self.set_backend(quantum_instance, **kwargs)
         else:
             if quantum_instance is not None:
@@ -209,26 +219,24 @@ class QGAN:
         return self._quantum_instance
 
     @quantum_instance.setter
-    def quantum_instance(
-        self, quantum_instance: Union[QuantumInstance, BaseBackend, Backend]
-    ) -> None:
+    def quantum_instance(self, quantum_instance: Union[QuantumInstance, Backend]) -> None:
         """Sets quantum instance."""
-        if isinstance(quantum_instance, (BaseBackend, Backend)):
+        if isinstance(quantum_instance, Backend):
             quantum_instance = QuantumInstance(quantum_instance)
         self._quantum_instance = quantum_instance
 
-    def set_backend(self, backend: Union[Backend, BaseBackend], **kwargs) -> None:
+    def set_backend(self, backend: Backend, **kwargs) -> None:
         """Sets backend with configuration."""
         self.quantum_instance = QuantumInstance(backend)
         self.quantum_instance.set_config(**kwargs)
 
     @property
-    def backend(self) -> Union[Backend, BaseBackend]:
+    def backend(self) -> Backend:
         """Returns backend."""
         return self.quantum_instance.backend
 
     @backend.setter
-    def backend(self, backend: Union[Backend, BaseBackend]):
+    def backend(self, backend: Backend):
         """Sets backend without additional configuration."""
         self.set_backend(backend)
 
@@ -271,6 +279,11 @@ class QGAN:
     def generator(self):
         """Returns generator"""
         return self._generator
+
+    @property
+    def penalty(self):
+        """Returns penalty parameter for the discriminator training"""
+        return self._penalty
 
     # pylint: disable=unused-argument
     def set_generator(
@@ -420,6 +433,7 @@ class QGAN:
                 ret_d = self._discriminator.train(
                     [real_batch, generated_batch],
                     [np.ones(len(real_batch)) / len(real_batch), generated_prob],
+                    penalty=self._penalty,
                 )
                 d_loss_min = ret_d["loss"]
 

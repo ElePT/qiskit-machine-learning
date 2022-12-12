@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2019, 2021.
+# (C) Copyright IBM 2019, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -23,7 +23,9 @@ from qiskit.circuit.library import TwoLocal
 from qiskit.utils import algorithm_globals, QuantumInstance
 from qiskit.algorithms.optimizers import ADAM, Optimizer
 from qiskit.opflow.gradients import Gradient
-from qiskit.opflow import CircuitStateFn
+from qiskit.opflow import CircuitStateFn, CircuitSampler
+
+from ....deprecation import deprecate_function
 from ....exceptions import QiskitMachineLearningError
 from .generative_network import GenerativeNetwork
 from .discriminative_network import DiscriminativeNetwork
@@ -43,6 +45,12 @@ class QuantumGenerator(GenerativeNetwork):
     Eventually, the trained generator can be used for state preparation e.g. in QAE.
     """
 
+    @deprecate_function(
+        "0.5.0",
+        additional_msg="with no direct replacement for it. "
+        "Instead, please refer to the new QGAN tutorial",
+        stack_level=3,
+    )
     def __init__(
         self,
         bounds: np.ndarray,
@@ -107,12 +115,12 @@ class QuantumGenerator(GenerativeNetwork):
             bounds = self._bounds
         for j, prec in enumerate(self._num_qubits):
             # prepare data grid for dim j
-            grid = np.linspace(bounds[j, 0], bounds[j, 1], (2 ** prec))
+            grid = np.linspace(bounds[j, 0], bounds[j, 1], (2**prec))
             if j == 0:
                 if len(self._num_qubits) > 1:
                     self._data_grid = [grid]
                 else:
-                    self._data_grid = grid  # type: ignore
+                    self._data_grid = cast(List, grid)
                 self._grid_elements = grid
             elif j == 1:
                 self._data_grid.append(grid)
@@ -122,7 +130,7 @@ class QuantumGenerator(GenerativeNetwork):
                         temp0 = [g_e]
                         temp0.append(g)
                         temp.append(temp0)
-                self._grid_elements = temp  # type: ignore
+                self._grid_elements = cast(np.ndarray, temp)
             else:
                 self._data_grid.append(grid)
                 temp = []
@@ -131,7 +139,7 @@ class QuantumGenerator(GenerativeNetwork):
                         temp0 = deepcopy(g_e)
                         temp0.append(g)
                         temp.append(temp0)
-                self._grid_elements = deepcopy(temp)  # type: ignore
+                self._grid_elements = cast(np.ndarray, deepcopy(temp))
         self._data_grid = np.array(self._data_grid, dtype=object)  # type: ignore
 
         self._seed = 7
@@ -306,23 +314,27 @@ class QuantumGenerator(GenerativeNetwork):
             result = result.get_statevector(qc)
             values = np.multiply(result, np.conj(result))
             values = list(values.real)
-            keys = []
-            for j in range(len(values)):
-                keys.append(np.binary_repr(j, int(sum(self._num_qubits))))
         else:
             result = result.get_counts(qc)
-            keys = list(result)
-            values = list(result.values())
-            values = [float(v) / np.sum(values) for v in values]
+            values_temp = list(result.values())
+            keys_temp = list(result)
+            values = np.zeros(2 ** int(sum(self._num_qubits)))
+            for i, key in enumerate(keys_temp):
+                values[int(key, 2)] = values_temp[i] / np.sum(values_temp)
+        keys = np.vectorize(np.binary_repr)(
+            np.arange(0, 2 ** int(sum(self._num_qubits))), width=int(sum(self._num_qubits))
+        )
+        # TODO In order to ensure scalability, the above line needs
+        # to be refactored into a sparse format.
         generated_samples_weights = values
-        for i, _ in enumerate(keys):
+        for key in keys:
             index = 0
             temp = []
             for k, p in enumerate(self._num_qubits):
                 bin_rep = 0
                 j = 0
                 while j < p:
-                    bin_rep += int(keys[i][index]) * 2 ** (int(p) - j - 1)
+                    bin_rep += int(key[index]) * 2 ** (int(p) - j - 1)
                     j += 1
                     index += 1
                 if len(self._num_qubits) > 1:
@@ -417,10 +429,21 @@ class QuantumGenerator(GenerativeNetwork):
                 quantum_instance, params=current_point, shots=self._shots
             )
             prediction_generated = discriminator.get_label(generated_data, detach=True)
-            op = ~CircuitStateFn(primitive=self.generator_circuit)
+            op = CircuitStateFn(primitive=self.generator_circuit)
             grad_object = gradient_object.convert(operator=op, params=free_params)
             value_dict = {free_params[i]: current_point[i] for i in range(len(free_params))}
-            analytical_gradients = np.array(grad_object.assign_parameters(value_dict).eval())
+            if quantum_instance is not None:
+                grad_object = (
+                    CircuitSampler(quantum_instance).convert(grad_object, value_dict).eval()
+                )
+                if quantum_instance.is_statevector:
+                    analytical_gradients = np.asarray(grad_object)
+                else:
+                    analytical_gradients = np.zeros((len(grad_object), grad_object[0].shape[1]))
+                    for i, _ in enumerate(grad_object):
+                        analytical_gradients[i, :] = grad_object[i].todense()
+            else:
+                analytical_gradients = np.array(grad_object.assign_parameters(value_dict).eval())
             loss_gradients = self.loss(
                 prediction_generated, np.transpose(analytical_gradients)
             ).real

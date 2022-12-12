@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2021.
+# (C) Copyright IBM 2021, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -10,12 +10,13 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 """A base ML model with a Scikit-Learn like interface."""
+from __future__ import annotations
 
 from abc import abstractmethod
 from typing import Union, Optional, Callable
 
 import numpy as np
-from qiskit.algorithms.optimizers import Optimizer, SLSQP
+from qiskit.algorithms.optimizers import Optimizer, SLSQP, OptimizerResult
 from qiskit.utils import algorithm_globals
 
 from qiskit_machine_learning import QiskitMachineLearningError
@@ -25,19 +26,15 @@ from qiskit_machine_learning.utils.loss_functions import (
     L1Loss,
     L2Loss,
     CrossEntropyLoss,
-    CrossEntropySigmoidLoss,
 )
-from qiskit_machine_learning.deprecation import deprecate_values
 
 from .objective_functions import ObjectiveFunction
+from .serializable_model import SerializableModelMixin
 
 
-class TrainableModel:
-    """Base class for ML model. This class defines Scikit-Learn like interface to implement."""
+class TrainableModel(SerializableModelMixin):
+    """Base class for ML model that defines a scikit-learn like interface for Estimators."""
 
-    @deprecate_values(
-        "0.2.0", {"loss": {"l1": "absolute_error", "l2": "squared_error"}}, stack_level=4
-    )
     def __init__(
         self,
         neural_network: NeuralNetwork,
@@ -61,12 +58,12 @@ class TrainableModel:
                 function is applied to the index and weighted with the corresponding probability.
             loss: A target loss function to be used in training. Default is `squared_error`,
                 i.e. L2 loss. Can be given either as a string for 'absolute_error' (i.e. L1 Loss),
-                'squared_error', 'cross_entropy', 'cross_entropy_sigmoid', or as a loss function
+                'squared_error', 'cross_entropy', or as a loss function
                 implementing the Loss interface.
             optimizer: An instance of an optimizer to be used in training. When `None` defaults to SLSQP.
             warm_start: Use weights from previous fit to start next fit.
             initial_point: Initial point for the optimizer to start from.
-            callback: a reference to a user's callback function that has two parameters and
+            callback: A reference to a user's callback function that has two parameters and
                 returns ``None``. The callback can access intermediate data during training.
                 On each iteration an optimizer invokes the callback and passes current weights
                 as an array and a computed value as a float of the objective function being
@@ -87,20 +84,14 @@ class TrainableModel:
                 self._loss = L2Loss()
             elif loss == "cross_entropy":
                 self._loss = CrossEntropyLoss()
-            elif loss == "cross_entropy_sigmoid":
-                self._loss = CrossEntropySigmoidLoss()
-            elif loss == "l1":
-                self._loss = L1Loss()
-            elif loss == "l2":
-                self._loss = L2Loss()
             else:
                 raise QiskitMachineLearningError(f"Unknown loss {loss}!")
 
-        if optimizer is None:
-            optimizer = SLSQP()
-        self._optimizer = optimizer
+        # call the setter that has some additional checks
+        self.optimizer = optimizer
+
         self._warm_start = warm_start
-        self._fit_result = None
+        self._fit_result: OptimizerResult | None = None
         self._initial_point = initial_point
         self._callback = callback
 
@@ -118,6 +109,13 @@ class TrainableModel:
     def optimizer(self) -> Optimizer:
         """Returns an optimizer to be used in training."""
         return self._optimizer
+
+    @optimizer.setter
+    def optimizer(self, optimizer: Optional[Optimizer] = None):
+        """Sets the optimizer to use in training process."""
+        if optimizer is None:
+            optimizer = SLSQP()
+        self._optimizer = optimizer
 
     @property
     def warm_start(self) -> bool:
@@ -139,9 +137,46 @@ class TrainableModel:
         """Sets the initial point"""
         self._initial_point = initial_point
 
-    @abstractmethod
+    @property
+    def weights(self) -> np.ndarray:
+        """Returns trained weights as a numpy array. The weights can be also queried by calling
+        `model.fit_result.x`, but in this case their representation depends on the optimizer used.
+
+        Raises:
+            QiskitMachineLearningError: If the model has not been fit.
+        """
+        self._check_fitted()
+        return np.asarray(self._fit_result.x)
+
+    @property
+    def fit_result(self) -> OptimizerResult:
+        """Returns a resulting object from the optimization procedure. Please refer to the
+        documentation of the `OptimizerResult
+        <https://qiskit.org/documentation/stubs/qiskit.algorithms.optimizers.OptimizerResult.html>`_
+        class for more details.
+
+        Raises:
+            QiskitMachineLearningError: If the model has not been fit.
+        """
+        self._check_fitted()
+        return self._fit_result
+
+    @property
+    def callback(self) -> Optional[Callable[[np.ndarray, float], None]]:
+        """Return the callback."""
+        return self._callback
+
+    @callback.setter
+    def callback(self, callback: Optional[Callable[[np.ndarray, float], None]]) -> None:
+        """Set the callback."""
+        self._callback = callback
+
+    def _check_fitted(self) -> None:
+        if self._fit_result is None:
+            raise QiskitMachineLearningError("The model has not been fitted yet")
+
     # pylint: disable=invalid-name
-    def fit(self, X: np.ndarray, y: np.ndarray) -> "TrainableModel":
+    def fit(self, X: np.ndarray, y: np.ndarray) -> TrainableModel:
         """
         Fit the model to data matrix X and target(s) y.
 
@@ -155,10 +190,18 @@ class TrainableModel:
         Raises:
             QiskitMachineLearningError: In case of invalid data (e.g. incompatible with network)
         """
-        raise NotImplementedError
+        if not self._warm_start:
+            self._fit_result = None
+
+        self._fit_result = self._fit_internal(X, y)
+        return self
 
     @abstractmethod
     # pylint: disable=invalid-name
+    def _fit_internal(self, X: np.ndarray, y: np.ndarray) -> OptimizerResult:
+        raise NotImplementedError
+
+    @abstractmethod
     def predict(self, X: np.ndarray) -> np.ndarray:
         """
         Predict using the network specified to the model.
@@ -201,7 +244,7 @@ class TrainableModel:
             An array as an initial point
         """
         if self._warm_start and self._fit_result is not None:
-            self._initial_point = self._fit_result[0]
+            self._initial_point = self._fit_result.x
         elif self._initial_point is None:
             self._initial_point = algorithm_globals.random.random(self._neural_network.num_weights)
         return self._initial_point

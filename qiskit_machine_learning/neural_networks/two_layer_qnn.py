@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2020, 2021.
+# (C) Copyright IBM 2020, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -13,109 +13,88 @@
 """A Two Layer Neural Network consisting of a first parametrized circuit representing a feature map
 to map the input data to a quantum states and a second one representing a ansatz that can
 be trained to solve a particular tasks."""
-from typing import Optional, Union
+from __future__ import annotations
 
 from qiskit import QuantumCircuit
-from qiskit.circuit.library import RealAmplitudes, ZZFeatureMap
 from qiskit.opflow import PauliSumOp, StateFn, OperatorBase, ExpectationBase
-from qiskit.providers import BaseBackend, Backend
-from qiskit.utils import QuantumInstance
+from qiskit.providers import Backend
+from qiskit.utils import QuantumInstance, deprecate_function
 
 from .opflow_qnn import OpflowQNN
-from ..exceptions import QiskitMachineLearningError
+from ..utils import derive_num_qubits_feature_map_ansatz
 
 
 class TwoLayerQNN(OpflowQNN):
-    """Two Layer Quantum Neural Network consisting of a feature map, a ansatz,
+    """Pending deprecation: Two Layer Quantum Neural Network consisting of a feature map, a ansatz,
     and an observable.
     """
 
+    @deprecate_function(
+        "The TwoLayerQNN class is pending deprecation and has no direct replacement. Make use of "
+        "qiskit_machine_learning.neural_networks.EstimatorQNN instead."
+        "This class will be deprecated in a future release and subsequently "
+        "removed after that.",
+        stacklevel=3,
+        category=PendingDeprecationWarning,
+    )
     def __init__(
         self,
-        num_qubits: int = None,
-        feature_map: QuantumCircuit = None,
-        ansatz: QuantumCircuit = None,
-        observable: Optional[OperatorBase] = None,
-        exp_val: Optional[ExpectationBase] = None,
-        quantum_instance: Optional[Union[QuantumInstance, BaseBackend, Backend]] = None,
+        num_qubits: int | None = None,
+        feature_map: QuantumCircuit | None = None,
+        ansatz: QuantumCircuit | None = None,
+        observable: OperatorBase | QuantumCircuit | None = None,
+        exp_val: ExpectationBase | None = None,
+        quantum_instance: QuantumInstance | Backend | None = None,
         input_gradients: bool = False,
     ):
         r"""
         Args:
-            num_qubits: The number of qubits to represent the network, if None and neither the
-                feature_map not the ansatz are given, raise exception.
-            feature_map: The (parametrized) circuit to be used as feature map. If None is given,
-                the `ZZFeatureMap` is used.
-            ansatz: The (parametrized) circuit to be used as ansatz. If None is given,
-                the `RealAmplitudes` circuit is used.
-            observable: observable to be measured to determine the output of the network. If None
-                is given, the `Z^{\otimes num_qubits}` observable is used.
+            num_qubits: The number of qubits to represent the network. If ``None`` is given,
+                the number of qubits is derived from the feature map or ansatz. If neither of those
+                is given, raises an exception. The number of qubits in the feature map and ansatz
+                are adjusted to this number if required.
+            feature_map: The (parametrized) circuit to be used as a feature map. If ``None`` is given,
+                the ``ZZFeatureMap`` is used if the number of qubits is larger than 1. For
+                a single qubit two-layer QNN the ``ZFeatureMap`` circuit is used per default.
+            ansatz: The (parametrized) circuit to be used as an ansatz. If ``None`` is given,
+                the ``RealAmplitudes`` circuit is used.
+            observable: observable to be measured to determine the output of the network. If
+                ``None`` is given, the :math:`Z^{\otimes num\_qubits}` observable is used.
             exp_val: The Expected Value converter to be used for the operator obtained from the
                 feature map and ansatz.
             quantum_instance: The quantum instance to evaluate the network.
             input_gradients: Determines whether to compute gradients with respect to input data.
                 Note that this parameter is ``False`` by default, and must be explicitly set to
-                ``True`` for a proper gradient computation when using ``TorchConnector``.
+                ``True`` for a proper gradient computation when using
+                :class:`~qiskit_machine_learning.connectors.TorchConnector`.
         Raises:
-            QiskitMachineLearningError: In case of inconsistent num_qubits, feature_map, ansatz.
+            QiskitMachineLearningError: Needs at least one out of ``num_qubits``, ``feature_map`` or
+                ``ansatz`` to be given. Or the number of qubits in the feature map and/or ansatz
+                can't be adjusted to ``num_qubits``.
         """
 
-        # check num_qubits, feature_map, and ansatz
-        if num_qubits is None and feature_map is None and ansatz is None:
-            raise QiskitMachineLearningError(
-                "Need at least one of num_qubits, feature_map, or ansatz!"
-            )
-        num_qubits_: int = None
-        feature_map_: QuantumCircuit = None
-        ansatz_: QuantumCircuit = None
-        if num_qubits:
-            num_qubits_ = num_qubits
-            if feature_map:
-                if feature_map.num_qubits != num_qubits:
-                    raise QiskitMachineLearningError("Incompatible num_qubits and feature_map!")
-                feature_map_ = feature_map
-            else:
-                feature_map_ = ZZFeatureMap(num_qubits)
-            if ansatz:
-                if ansatz.num_qubits != num_qubits:
-                    raise QiskitMachineLearningError("Incompatible num_qubits and ansatz!")
-                ansatz_ = ansatz
-            else:
-                ansatz_ = RealAmplitudes(num_qubits)
-        else:
-            if feature_map and ansatz:
-                if feature_map.num_qubits != ansatz.num_qubits:
-                    raise QiskitMachineLearningError("Incompatible feature_map and ansatz!")
-                feature_map_ = feature_map
-                ansatz_ = ansatz
-                num_qubits_ = feature_map.num_qubits
-            elif feature_map:
-                num_qubits_ = feature_map.num_qubits
-                feature_map_ = feature_map
-                ansatz_ = RealAmplitudes(num_qubits_)
-            elif ansatz:
-                num_qubits_ = ansatz.num_qubits
-                ansatz_ = ansatz
-                feature_map_ = ZZFeatureMap(num_qubits_)
+        num_qubits, feature_map, ansatz = derive_num_qubits_feature_map_ansatz(
+            num_qubits, feature_map, ansatz
+        )
 
-        self._feature_map = feature_map_
+        self._feature_map = feature_map
         input_params = list(self._feature_map.parameters)
 
-        self._ansatz = ansatz_
+        self._ansatz = ansatz
         weight_params = list(self._ansatz.parameters)
 
         # construct circuit
-        self._circuit = QuantumCircuit(num_qubits_)
-        self._circuit.append(self._feature_map, range(num_qubits_))
-        self._circuit.append(self._ansatz, range(num_qubits_))
+        self._circuit = QuantumCircuit(num_qubits)
+        self._circuit.append(self._feature_map, range(num_qubits))
+        self._circuit.append(self._ansatz, range(num_qubits))
 
         # construct observable
         self.observable = (
-            observable if observable else PauliSumOp.from_list([("Z" * num_qubits_, 1)])
+            observable if observable is not None else PauliSumOp.from_list([("Z" * num_qubits, 1)])
         )
 
         # combine all to operator
-        operator = ~StateFn(self.observable) @ StateFn(self._circuit)
+        operator = StateFn(self.observable, is_measurement=True) @ StateFn(self._circuit)
 
         super().__init__(
             operator=operator,

@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2018, 2021.
+# (C) Copyright IBM 2018, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -13,15 +13,18 @@
 """Test Two Layer QNN."""
 
 import unittest
+import warnings
 
 from test import QiskitMachineLearningTestCase
 
 import numpy as np
-from ddt import ddt, data
-from qiskit import Aer
-from qiskit.circuit.library import RealAmplitudes, ZZFeatureMap
-from qiskit.utils import QuantumInstance, algorithm_globals
 
+from ddt import ddt, data
+from qiskit import QuantumCircuit
+from qiskit.circuit.library import RealAmplitudes, ZFeatureMap, ZZFeatureMap
+from qiskit.utils import QuantumInstance, algorithm_globals, optionals
+
+from qiskit_machine_learning import QiskitMachineLearningError
 from qiskit_machine_learning.neural_networks import TwoLayerQNN
 
 
@@ -29,11 +32,15 @@ from qiskit_machine_learning.neural_networks import TwoLayerQNN
 class TestTwoLayerQNN(QiskitMachineLearningTestCase):
     """Two Layer QNN Tests."""
 
+    @unittest.skipUnless(optionals.HAS_AER, "qiskit-aer is required to run this test")
     def setUp(self):
         super().setUp()
+        warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
         algorithm_globals.random_seed = 12345
+        from qiskit_aer import Aer
+
         # specify "run configuration"
-        quantum_instance = QuantumInstance(
+        self.quantum_instance = QuantumInstance(
             Aer.get_backend("aer_simulator_statevector"),
             seed_simulator=algorithm_globals.random_seed,
             seed_transpiler=algorithm_globals.random_seed,
@@ -47,10 +54,14 @@ class TestTwoLayerQNN(QiskitMachineLearningTestCase):
             num_qubits,
             feature_map=feature_map,
             ansatz=ansatz,
-            quantum_instance=quantum_instance,
+            quantum_instance=self.quantum_instance,
         )
 
         self.qnn_no_qi = TwoLayerQNN(num_qubits, feature_map=feature_map, ansatz=ansatz)
+
+    def tearDown(self) -> None:
+        super().tearDown()
+        warnings.filterwarnings("always", category=PendingDeprecationWarning)
 
     @data(
         ("qi", True),
@@ -120,6 +131,40 @@ class TestTwoLayerQNN(QiskitMachineLearningTestCase):
             self.assertIsNone(result[0])
 
         self.assertEqual(result[1].shape, (batch_size, *qnn.output_shape, qnn.num_weights))
+
+    @data(1, 2)
+    def test_default_construction(self, num_features):
+        """Test the default construction for 1 feature and more than 1 feature."""
+        qnn = TwoLayerQNN(num_features)
+
+        with self.subTest(msg="Check ansatz"):
+            self.assertIsInstance(qnn.ansatz, RealAmplitudes)
+
+        with self.subTest(msg="Check feature map"):
+            expected_cls = ZZFeatureMap if num_features > 1 else ZFeatureMap
+            self.assertIsInstance(qnn.feature_map, expected_cls)
+
+    def test_circuit_extensions(self):
+        """Test TwoLayerQNN when the number of qubits is different compared to
+        the feature map/ansatz."""
+        num_qubits = 2
+        classifier = TwoLayerQNN(
+            num_qubits=num_qubits,
+            feature_map=ZFeatureMap(1),
+            ansatz=RealAmplitudes(1),
+            quantum_instance=self.quantum_instance,
+        )
+        self.assertEqual(classifier.feature_map.num_qubits, num_qubits)
+        self.assertEqual(classifier.ansatz.num_qubits, num_qubits)
+
+        qc = QuantumCircuit(1)
+        with self.assertRaises(QiskitMachineLearningError):
+            _ = TwoLayerQNN(
+                num_qubits=num_qubits,
+                feature_map=qc,
+                ansatz=qc,
+                quantum_instance=self.quantum_instance,
+            )
 
 
 if __name__ == "__main__":

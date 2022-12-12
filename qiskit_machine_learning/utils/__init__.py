@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2021.
+# (C) Copyright IBM 2021, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,9 +11,10 @@
 # that they have been altered from the originals.
 
 """
-Utilities (:mod:`qiskit_machine_learning.utils`)
-========================================================================
-A collection of utilities provided by Qiskit Machine Learning.
+Utility functions and classes (:mod:`qiskit_machine_learning.utils`)
+====================================================================
+
+A collection of utility functions and classes provided by Qiskit Machine Learning.
 
 .. currentmodule:: qiskit_machine_learning.utils
 
@@ -26,3 +27,6 @@ Utilities
    loss_functions
 
 """
+from .adjust_num_qubits import derive_num_qubits_feature_map_ansatz
+
+__all__ = ["derive_num_qubits_feature_map_ansatz"]

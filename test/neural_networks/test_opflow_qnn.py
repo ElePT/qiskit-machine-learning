@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2018, 2021.
+# (C) Copyright IBM 2018, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,7 +11,7 @@
 # that they have been altered from the originals.
 
 """ Test Opflow QNN """
-
+import warnings
 from typing import List
 
 from test import QiskitMachineLearningTestCase
@@ -20,11 +20,10 @@ import unittest
 from ddt import ddt, data
 
 import numpy as np
-from qiskit import Aer
-from qiskit.providers.aer import AerSimulator
+
 from qiskit.circuit import Parameter, QuantumCircuit
 from qiskit.opflow import PauliExpectation, Gradient, StateFn, PauliSumOp, ListOp
-from qiskit.utils import QuantumInstance, algorithm_globals
+from qiskit.utils import QuantumInstance, algorithm_globals, optionals
 
 
 from qiskit_machine_learning.neural_networks import OpflowQNN
@@ -37,22 +36,32 @@ STATEVECTOR = "sv"
 class TestOpflowQNN(QiskitMachineLearningTestCase):
     """Opflow QNN Tests."""
 
+    @unittest.skipUnless(optionals.HAS_AER, "qiskit-aer is required to run this test")
     def setUp(self):
         super().setUp()
+        warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
 
         algorithm_globals.random_seed = 12345
+        from qiskit_aer import Aer, AerSimulator
+
         # specify quantum instances
         self.sv_quantum_instance = QuantumInstance(
             Aer.get_backend("aer_simulator_statevector"),
             seed_simulator=algorithm_globals.random_seed,
             seed_transpiler=algorithm_globals.random_seed,
         )
+        # pylint: disable=no-member
         self.qasm_quantum_instance = QuantumInstance(
             AerSimulator(),
             shots=100,
             seed_simulator=algorithm_globals.random_seed,
             seed_transpiler=algorithm_globals.random_seed,
         )
+        np.random.seed(algorithm_globals.random_seed)
+
+    def tearDown(self) -> None:
+        super().tearDown()
+        warnings.filterwarnings("always", category=PendingDeprecationWarning)
 
     def validate_output_shape(self, qnn: OpflowQNN, test_data: List[np.ndarray]) -> None:
         """
@@ -315,6 +324,33 @@ class TestOpflowQNN(QiskitMachineLearningTestCase):
 
         qnn.forward(input_data, weights)
         qnn.backward(input_data, weights)
+
+    def test_delayed_gradient_initialization(self):
+        """Test delayed gradient initialization."""
+        qc = QuantumCircuit(1)
+        input_param = Parameter("x")
+        qc.ry(input_param, 0)
+
+        weight_param = Parameter("w")
+        qc.rx(weight_param, 0)
+
+        observable = StateFn(PauliSumOp.from_list([("Z", 1)]))
+        op = ~observable @ StateFn(qc)
+
+        # define QNN
+        qnn = OpflowQNN(op, [input_param], [weight_param])
+        self.assertIsNone(qnn._gradient_operator)
+
+        qnn.backward(np.asarray([1]), np.asarray([1]))
+        grad_op1 = qnn._gradient_operator
+        self.assertIsNotNone(grad_op1)
+
+        qnn.input_gradients = True
+        self.assertIsNone(qnn._gradient_operator)
+        qnn.backward(np.asarray([1]), np.asarray([1]))
+        grad_op2 = qnn._gradient_operator
+        self.assertIsNotNone(grad_op1)
+        self.assertNotEqual(grad_op1, grad_op2)
 
 
 if __name__ == "__main__":

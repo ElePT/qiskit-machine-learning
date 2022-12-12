@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2019, 2021.
+# (C) Copyright IBM 2019, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -22,6 +22,8 @@ import os
 import numpy as np
 from qiskit.utils import algorithm_globals
 from qiskit.algorithms.optimizers import ADAM
+
+from ....deprecation import deprecate_function
 from .discriminative_network import DiscriminativeNetwork
 
 
@@ -36,6 +38,12 @@ class DiscriminatorNet:
     https://towardsdatascience.com/lets-code-a-neural-network-in-plain-numpy-ae7e74410795
     """
 
+    @deprecate_function(
+        "0.5.0",
+        additional_msg="with no direct replacement for it. "
+        "Instead, please refer to the new QGAN tutorial",
+        stack_level=3,
+    )
     def __init__(self, n_features=1, n_out=1):
         """
         Initialize the discriminator network.
@@ -274,7 +282,7 @@ class NumPyDiscriminator(DiscriminativeNetwork):
         Load discriminator model
 
         Args:
-            load_dir (str): file with stored pytorch discriminator model to be loaded
+            load_dir (str): file with stored PyTorch discriminator model to be loaded
         """
         self._discriminator.architecture = np.load(
             os.path.join(load_dir, "np_discriminator_architecture.csv")

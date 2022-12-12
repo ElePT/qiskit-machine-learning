@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2021.
+# (C) Copyright IBM 2021, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -11,8 +11,10 @@
 # that they have been altered from the originals.
 
 """ Test Pegasos QSVC """
-
+import os
+import tempfile
 import unittest
+import warnings
 
 from test import QiskitMachineLearningTestCase
 
@@ -24,10 +26,9 @@ from sklearn.preprocessing import MinMaxScaler
 from qiskit import BasicAer
 from qiskit.circuit.library import ZFeatureMap
 from qiskit.utils import QuantumInstance, algorithm_globals
-from qiskit_machine_learning.algorithms import PegasosQSVC
+from qiskit_machine_learning.algorithms import PegasosQSVC, SerializableModelMixin
 
-
-from qiskit_machine_learning.kernels import QuantumKernel
+from qiskit_machine_learning.kernels import QuantumKernel, FidelityQuantumKernel
 from qiskit_machine_learning.exceptions import QiskitMachineLearningError
 
 
@@ -36,6 +37,7 @@ class TestPegasosQSVC(QiskitMachineLearningTestCase):
 
     def setUp(self):
         super().setUp()
+        warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
 
         algorithm_globals.random_seed = 10598
 
@@ -64,6 +66,26 @@ class TestPegasosQSVC(QiskitMachineLearningTestCase):
         self.sample_test = sample[15:]
         self.label_test = label[15:]
 
+        # The same for a 4-dimensional example
+        # number of qubits is equal to the number of features
+        self.q_4d = 4
+        self.feature_map_4d = ZFeatureMap(feature_dimension=self.q_4d, reps=1)
+
+        sample_4d, label_4d = make_blobs(
+            n_samples=20, n_features=self.q_4d, centers=2, random_state=3, shuffle=True
+        )
+        sample_4d = MinMaxScaler(feature_range=(0, np.pi)).fit_transform(sample_4d)
+
+        # split into train and test set
+        self.sample_train_4d = sample_4d[:15]
+        self.label_train_4d = label_4d[:15]
+        self.sample_test_4d = sample_4d[15:]
+        self.label_test_4d = label_4d[15:]
+
+    def tearDown(self) -> None:
+        super().tearDown()
+        warnings.filterwarnings("always", category=PendingDeprecationWarning)
+
     def test_qsvc(self):
         """Test PegasosQSVC"""
         qkernel = QuantumKernel(
@@ -75,6 +97,31 @@ class TestPegasosQSVC(QiskitMachineLearningTestCase):
         pegasos_qsvc.fit(self.sample_train, self.label_train)
         score = pegasos_qsvc.score(self.sample_test, self.label_test)
 
+        self.assertEqual(score, 1.0)
+
+    def test_decision_function(self):
+        """Test PegasosQSVC."""
+        qkernel = QuantumKernel(
+            feature_map=self.feature_map, quantum_instance=self.statevector_simulator
+        )
+
+        pegasos_qsvc = PegasosQSVC(quantum_kernel=qkernel, C=1000, num_steps=self.tau)
+
+        pegasos_qsvc.fit(self.sample_train, self.label_train)
+        decision_function = pegasos_qsvc.decision_function(self.sample_test)
+
+        self.assertTrue(np.all((decision_function > 0) == (self.label_test == 0)))
+
+    def test_qsvc_4d(self):
+        """Test PegasosQSVC with 4-dimensional input data"""
+        qkernel = QuantumKernel(
+            feature_map=self.feature_map_4d, quantum_instance=self.statevector_simulator
+        )
+
+        pegasos_qsvc = PegasosQSVC(quantum_kernel=qkernel, C=1000, num_steps=self.tau)
+
+        pegasos_qsvc.fit(self.sample_train_4d, self.label_train_4d)
+        score = pegasos_qsvc.score(self.sample_test_4d, self.label_test_4d)
         self.assertEqual(score, 1.0)
 
     def test_precomputed_kernel(self):
@@ -116,18 +163,6 @@ class TestPegasosQSVC(QiskitMachineLearningTestCase):
 
         self.assertEqual(score, 1)
 
-    def test_wrong_parameters(self):
-        """Tests PegasosQSVC with incorrect constructor parameter values."""
-        qkernel = QuantumKernel(
-            feature_map=self.feature_map, quantum_instance=self.statevector_simulator
-        )
-
-        with self.subTest("Both kernel and precomputed are passed"):
-            self.assertRaises(ValueError, PegasosQSVC, quantum_kernel=qkernel, precomputed=True)
-
-        with self.subTest("Incorrect quantum kernel value is passed"):
-            self.assertRaises(TypeError, PegasosQSVC, quantum_kernel=1)
-
     def test_labels(self):
         """Test PegasosQSVC with different integer labels than {0, 1}"""
         qkernel = QuantumKernel(
@@ -153,7 +188,7 @@ class TestPegasosQSVC(QiskitMachineLearningTestCase):
         """Tests properties of PegasosQSVC"""
         with self.subTest("Default parameters"):
             pegasos_qsvc = PegasosQSVC()
-            self.assertIsInstance(pegasos_qsvc.quantum_kernel, QuantumKernel)
+            self.assertIsInstance(pegasos_qsvc.quantum_kernel, FidelityQuantumKernel)
             self.assertFalse(pegasos_qsvc.precomputed)
             self.assertEqual(pegasos_qsvc.num_steps, 1000)
 
@@ -177,9 +212,11 @@ class TestPegasosQSVC(QiskitMachineLearningTestCase):
             with self.assertRaises(ValueError):
                 _ = PegasosQSVC(quantum_kernel=qkernel, precomputed=True)
 
-        with self.subTest("PegasosQSVC with wrong type of kernel"):
-            with self.assertRaises(TypeError):
-                _ = PegasosQSVC(quantum_kernel=object())
+        with self.subTest("Both kernel and precomputed are passed"):
+            qkernel = QuantumKernel(
+                feature_map=self.feature_map, quantum_instance=self.statevector_simulator
+            )
+            self.assertRaises(ValueError, PegasosQSVC, quantum_kernel=qkernel, precomputed=True)
 
     def test_change_kernel_types(self):
         """Test PegasosQSVC with a precomputed kernel matrix"""
@@ -201,6 +238,43 @@ class TestPegasosQSVC(QiskitMachineLearningTestCase):
         score = pegasos_qsvc.score(self.sample_test, self.label_test)
 
         self.assertEqual(score, 1.0)
+
+    def test_save_load(self):
+        """Tests save and load models."""
+        features = np.array([[0, 0], [0.1, 0.2], [1, 1], [0.9, 0.8]])
+        labels = np.array([0, 0, 1, 1])
+
+        qkernel = QuantumKernel(
+            feature_map=self.feature_map, quantum_instance=self.statevector_simulator
+        )
+
+        regressor = PegasosQSVC(quantum_kernel=qkernel, C=1000, num_steps=self.tau)
+        regressor.fit(features, labels)
+
+        # predicted labels from the newly trained model
+        test_features = np.array([[0.5, 0.5]])
+        original_predicts = regressor.predict(test_features)
+
+        # save/load, change the quantum instance and check if predicted values are the same
+        file_name = os.path.join(tempfile.gettempdir(), "pegasos.model")
+        regressor.save(file_name)
+        try:
+            regressor_load = PegasosQSVC.load(file_name)
+            loaded_model_predicts = regressor_load.predict(test_features)
+
+            np.testing.assert_array_almost_equal(original_predicts, loaded_model_predicts)
+
+            # test loading warning
+            class FakeModel(SerializableModelMixin):
+                """Fake model class for test purposes."""
+
+                pass
+
+            with self.assertRaises(TypeError):
+                FakeModel.load(file_name)
+
+        finally:
+            os.remove(file_name)
 
 
 if __name__ == "__main__":

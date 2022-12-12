@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2019, 2021.
+# (C) Copyright IBM 2019, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -15,9 +15,9 @@
 import unittest
 import warnings
 import tempfile
-from test import QiskitMachineLearningTestCase, requires_extra_library
+from test import QiskitMachineLearningTestCase
 
-from ddt import ddt, data
+from ddt import ddt, data, unpack
 
 from qiskit import BasicAer, QuantumCircuit
 from qiskit.circuit.library import RealAmplitudes
@@ -29,6 +29,7 @@ from qiskit_machine_learning.algorithms import (
     PyTorchDiscriminator,
     QGAN,
 )
+import qiskit_machine_learning.optionals as _optionals
 
 
 @ddt
@@ -37,6 +38,7 @@ class TestQGAN(QiskitMachineLearningTestCase):
 
     def setUp(self):
         super().setUp()
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         self.seed = 7
         algorithm_globals.random_seed = self.seed
@@ -89,6 +91,10 @@ class TestQGAN(QiskitMachineLearningTestCase):
         qc.compose(ansatz, inplace=True)
         self.generator_circuit = qc
 
+    def tearDown(self) -> None:
+        super().tearDown()
+        warnings.filterwarnings("always", category=DeprecationWarning)
+
     def test_sample_generation(self):
         """Test sample generation."""
         self.qgan.set_generator(generator_circuit=self.generator_circuit)
@@ -121,15 +127,13 @@ class TestQGAN(QiskitMachineLearningTestCase):
 
     def test_qgan_training(self):
         """Test QGAN training."""
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
         self.qgan.set_generator(generator_circuit=self.generator_circuit)
-        warnings.filterwarnings("always", category=DeprecationWarning)
 
         trained_statevector = self.qgan.run(self.qi_statevector)
         trained_qasm = self.qgan.run(self.qi_qasm)
         self.assertAlmostEqual(trained_qasm["rel_entr"], trained_statevector["rel_entr"], delta=0.1)
 
-    @requires_extra_library
+    @unittest.skipIf(not _optionals.HAS_TORCH, "PyTorch not available.")
     def test_qgan_training_run_algo_torch(self):
         """Test QGAN training using a PyTorch discriminator."""
         # Set number of qubits per data dimension as list of k qubit values[#q_0,...,#q_k-1]
@@ -165,7 +169,7 @@ class TestQGAN(QiskitMachineLearningTestCase):
         )
         self.assertAlmostEqual(trained_qasm["rel_entr"], trained_statevector["rel_entr"], delta=0.1)
 
-    @requires_extra_library
+    @unittest.skipIf(not _optionals.HAS_TORCH, "PyTorch not available.")
     def test_qgan_training_run_algo_torch_multivariate(self):
         """Test QGAN training using a PyTorch discriminator, for multivariate distributions."""
         # Set number of qubits per data dimension as list of k qubit values[#q_0,...,#q_k-1]
@@ -337,6 +341,70 @@ class TestQGAN(QiskitMachineLearningTestCase):
         self.qgan.set_generator(self.generator_circuit, generator_gradient=Gradient("param_shift"))
         analytic_results = self.qgan.run(q_inst)
         self.assertAlmostEqual(numeric_results["rel_entr"], analytic_results["rel_entr"], delta=0.1)
+
+    @unittest.skipIf(not _optionals.HAS_TORCH, "PyTorch not available.")
+    def test_qgan_gradient_penalty_pytorch(self):
+        """
+        Test QGAN training with gradient penalty for the discriminator
+        """
+        num_qubits = [2]
+        # Batch size
+        batch_size = 100
+        # Set number of training epochs
+        num_epochs = 5
+        _qgan = QGAN(
+            self._real_data,
+            self._bounds,
+            num_qubits,
+            batch_size,
+            num_epochs,
+            discriminator=PyTorchDiscriminator(n_features=len(num_qubits)),
+            snapshot_dir=None,
+            penalty=True,
+        )
+        _qgan.seed = self.seed
+        _qgan.set_generator()
+        trained_statevector = _qgan.run(
+            QuantumInstance(
+                BasicAer.get_backend("statevector_simulator"),
+                seed_simulator=algorithm_globals.random_seed,
+                seed_transpiler=algorithm_globals.random_seed,
+            )
+        )
+        trained_qasm = _qgan.run(
+            QuantumInstance(
+                BasicAer.get_backend("qasm_simulator"),
+                seed_simulator=algorithm_globals.random_seed,
+                seed_transpiler=algorithm_globals.random_seed,
+            )
+        )
+        self.assertAlmostEqual(trained_qasm["rel_entr"], trained_statevector["rel_entr"], delta=0.1)
+
+    @data(
+        ("param_shift", "qasm"),
+        ("fin_diff", "qasm"),
+        ("lin_comb", "qasm"),
+        ("param_shift", "sv"),
+        ("fin_diff", "sv"),
+        ("lin_comb", "sv"),
+    )
+    @unpack
+    def test_qgan_training_custom_gradients(self, gradient_method: str, qi_type: str):
+        """
+        Test qGAN different gradient methods
+        """
+        if qi_type == "qasm":
+            q_i = self.qi_qasm
+        elif qi_type == "sv":
+            q_i = self.qi_statevector
+        else:
+            raise ValueError(f"Unsupported type of quantum instance: {qi_type}")
+        generator_gradient = Gradient(gradient_method)
+        self.qgan.set_generator(self.generator_circuit)
+        numeric_results = self.qgan.run(q_i)
+        self.qgan.set_generator(self.generator_circuit, generator_gradient=generator_gradient)
+        custom_results = self.qgan.run(q_i)
+        self.assertAlmostEqual(numeric_results["rel_entr"], custom_results["rel_entr"], delta=0.1)
 
 
 if __name__ == "__main__":

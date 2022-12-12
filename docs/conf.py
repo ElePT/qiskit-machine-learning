@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2021.
+# (C) Copyright IBM 2021, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -25,6 +25,7 @@
 #
 import os
 import sys
+from datetime import date
 
 sys.path.insert(0, os.path.abspath(".."))
 sys.path.append(os.path.abspath("."))
@@ -49,9 +50,7 @@ os.environ["QISKIT_DOCS"] = "TRUE"
 
 # -- Project information -----------------------------------------------------
 project = "Qiskit Machine Learning"
-copyright = (
-    "2018, 2021, Qiskit Machine Learning Development Team"  # pylint: disable=redefined-builtin
-)
+copyright = f"2018, {date.today().year}, Qiskit Machine Learning Development Team"  # pylint: disable=redefined-builtin
 author = "Qiskit Machine Learning Development Team"
 
 # The short X.Y version
@@ -103,7 +102,7 @@ extensions = [
     "sphinx.ext.mathjax",
     "sphinx.ext.viewcode",
     "sphinx.ext.extlinks",
-    "sphinx_panels",
+    "sphinx_design",
     "jupyter_sphinx",
     "sphinx_autodoc_typehints",
     "reno.sphinxext",
@@ -118,7 +117,6 @@ html_css_files = ["style.css", "custom.css", "gallery.css"]
 nbsphinx_timeout = 360
 nbsphinx_execute = os.getenv("QISKIT_DOCS_BUILD_TUTORIALS", "never")
 nbsphinx_widgets_path = ""
-exclude_patterns = ["_build", "**.ipynb_checkpoints"]
 nbsphinx_thumbnails = {}
 
 spelling_word_list_filename = "../.pylintdict"
@@ -154,7 +152,7 @@ numfig_format = {"table": "Table %s"}
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = None
+language = "en"
 
 # For Adding Locale
 locale_dirs = ["locale/"]  # path is example but recommended.
@@ -211,8 +209,14 @@ html_theme_options = {
 }
 
 intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+    "numpy": ("https://numpy.org/doc/stable", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy", None),
     "sklearn": ("https://scikit-learn.org/stable", None),
+    "qiskit": ("https://qiskit.org/documentation/", None),
 }
+
+html_context = {"analytics_enabled": True}
 
 import sphinx
 

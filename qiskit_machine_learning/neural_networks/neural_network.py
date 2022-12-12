@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2020, 2021.
+# (C) Copyright IBM 2020, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -13,15 +13,19 @@
 """A Neural Network abstract class for all (quantum) neural networks within Qiskit's
 machine learning module."""
 
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Tuple, Union, List, Optional
 
 import numpy as np
 
-try:
+import qiskit_machine_learning.optionals as _optionals
+from ..exceptions import QiskitMachineLearningError
+
+if _optionals.HAS_SPARSE:
+    # pylint: disable=import-error
     from sparse import SparseArray
-except ImportError:
+else:
 
     class SparseArray:  # type: ignore
         """Empty SparseArray class
@@ -29,9 +33,6 @@ except ImportError:
         """
 
         pass
-
-
-from ..exceptions import QiskitMachineLearningError
 
 
 class NeuralNetwork(ABC):
@@ -44,7 +45,7 @@ class NeuralNetwork(ABC):
         num_inputs: int,
         num_weights: int,
         sparse: bool,
-        output_shape: Union[int, Tuple[int, ...]],
+        output_shape: int | tuple[int, ...],
         input_gradients: bool = False,
     ) -> None:
         """
@@ -91,7 +92,7 @@ class NeuralNetwork(ABC):
         return self._sparse
 
     @property
-    def output_shape(self) -> Tuple[int, ...]:
+    def output_shape(self) -> tuple[int, ...]:
         """Returns the output shape."""
         return self._output_shape
 
@@ -116,8 +117,8 @@ class NeuralNetwork(ABC):
         return output_shape
 
     def _validate_input(
-        self, input_data: Optional[Union[List[float], np.ndarray, float]]
-    ) -> Tuple[Union[np.ndarray, None], Union[Tuple[int, ...], None]]:
+        self, input_data: float | list[float] | np.ndarray | None
+    ) -> tuple[np.ndarray | None, tuple[int, ...] | None]:
         if input_data is None:
             return None, None
         input_ = np.array(input_data)
@@ -143,16 +144,39 @@ class NeuralNetwork(ABC):
 
         return input_, shape
 
+    def _preprocess_forward(
+        self,
+        input_data: np.ndarray | None,
+        weights: np.ndarray | None,
+    ) -> tuple[np.ndarray | None, int | None]:
+        """
+        Pre-processing during forward pass of the network for the primitive-based networks.
+        """
+        if input_data is not None:
+            num_samples = input_data.shape[0]
+            if weights is not None:
+                weights = np.broadcast_to(weights, (num_samples, len(weights)))
+                parameters = np.concatenate((input_data, weights), axis=1)
+            else:
+                parameters = input_data
+        else:
+            if weights is not None:
+                num_samples = 1
+                parameters = np.broadcast_to(weights, (num_samples, len(weights)))
+            else:
+                return None, None
+        return parameters, num_samples
+
     def _validate_weights(
-        self, weights: Optional[Union[List[float], np.ndarray, float]]
-    ) -> Union[np.ndarray, None]:
+        self, weights: float | list[float] | np.ndarray | None
+    ) -> np.ndarray | None:
         if weights is None:
             return None
         weights_ = np.array(weights)
         return weights_.reshape(self._num_weights)
 
     def _validate_forward_output(
-        self, output_data: np.ndarray, original_shape: Tuple[int, ...]
+        self, output_data: np.ndarray, original_shape: tuple[int, ...]
     ) -> np.ndarray:
         if original_shape and len(original_shape) >= 2:
             output_data = output_data.reshape((*original_shape[:-1], *self._output_shape))
@@ -163,8 +187,8 @@ class NeuralNetwork(ABC):
         self,
         input_grad: np.ndarray,
         weight_grad: np.ndarray,
-        original_shape: Tuple[int, ...],
-    ) -> Tuple[Union[np.ndarray, SparseArray], Union[np.ndarray, SparseArray]]:
+        original_shape: tuple[int, ...],
+    ) -> tuple[np.ndarray | SparseArray, np.ndarray | SparseArray]:
         if input_grad is not None and np.prod(input_grad.shape) == 0:
             input_grad = None
         if input_grad is not None and original_shape and len(original_shape) >= 2:
@@ -182,9 +206,9 @@ class NeuralNetwork(ABC):
 
     def forward(
         self,
-        input_data: Optional[Union[List[float], np.ndarray, float]],
-        weights: Optional[Union[List[float], np.ndarray, float]],
-    ) -> Union[np.ndarray, SparseArray]:
+        input_data: float | list[float] | np.ndarray | None,
+        weights: float | list[float] | np.ndarray | None,
+    ) -> np.ndarray | SparseArray:
         """Forward pass of the network.
 
         Args:
@@ -202,15 +226,15 @@ class NeuralNetwork(ABC):
 
     @abstractmethod
     def _forward(
-        self, input_data: Optional[np.ndarray], weights: Optional[np.ndarray]
-    ) -> Union[np.ndarray, SparseArray]:
+        self, input_data: np.ndarray | None, weights: np.ndarray | None
+    ) -> np.ndarray | SparseArray:
         raise NotImplementedError
 
     def backward(
         self,
-        input_data: Optional[Union[List[float], np.ndarray, float]],
-        weights: Optional[Union[List[float], np.ndarray, float]],
-    ) -> Tuple[Optional[Union[np.ndarray, SparseArray]], Optional[Union[np.ndarray, SparseArray]],]:
+        input_data: float | list[float] | np.ndarray | None,
+        weights: float | list[float] | np.ndarray | None,
+    ) -> tuple[np.ndarray | SparseArray | None, np.ndarray | SparseArray | None]:
         """Backward pass of the network.
 
         Args:
@@ -235,6 +259,6 @@ class NeuralNetwork(ABC):
 
     @abstractmethod
     def _backward(
-        self, input_data: Optional[np.ndarray], weights: Optional[np.ndarray]
-    ) -> Tuple[Optional[Union[np.ndarray, SparseArray]], Optional[Union[np.ndarray, SparseArray]],]:
+        self, input_data: np.ndarray | None, weights: np.ndarray | None
+    ) -> tuple[np.ndarray | SparseArray | None, np.ndarray | SparseArray | None]:
         raise NotImplementedError

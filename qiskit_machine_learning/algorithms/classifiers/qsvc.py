@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2021.
+# (C) Copyright IBM 2021, 2022.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -18,17 +18,19 @@ from typing import Optional
 from qiskit.utils.algorithm_globals import algorithm_globals
 from sklearn.svm import SVC
 
+from qiskit_machine_learning.algorithms.serializable_model import SerializableModelMixin
 from qiskit_machine_learning.exceptions import QiskitMachineLearningWarning
-from qiskit_machine_learning.kernels.quantum_kernel import QuantumKernel
+from qiskit_machine_learning.kernels import BaseKernel, FidelityQuantumKernel
 
 
-class QSVC(SVC):
-    r"""Quantum Support Vector Classifier.
+class QSVC(SVC, SerializableModelMixin):
+    r"""Quantum Support Vector Classifier that extends the scikit-learn
+    `sklearn.svm.SVC <https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html>`_
+    classifier and introduces an additional `quantum_kernel` parameter.
 
-    This class shows how to use a quantum kernel for classification. The class extends
-    `sklearn.svm.SVC <https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html>`_,
-    and thus inherits its methods like ``fit`` and ``predict`` used in the example below.
-    Read more in the `sklearn user guide
+    This class shows how to use a quantum kernel for classification. The class inherits its methods
+    like ``fit`` and ``predict`` from scikit-learn, see the example below.
+    Read more in the `scikit-learn user guide
     <https://scikit-learn.org/stable/modules/svm.html#svm-classification>`_.
 
     **Example**
@@ -40,21 +42,13 @@ class QSVC(SVC):
         qsvc.predict(sample_test)
     """
 
-    def __init__(self, *args, quantum_kernel: Optional[QuantumKernel] = None, **kwargs):
+    def __init__(self, *, quantum_kernel: Optional[BaseKernel] = None, **kwargs):
         """
         Args:
-            quantum_kernel: QuantumKernel to be used for classification.
+            quantum_kernel: Quantum kernel to be used for classification.
             *args: Variable length argument list to pass to SVC constructor.
             **kwargs: Arbitrary keyword arguments to pass to SVC constructor.
         """
-        if (len(args)) != 0:
-            msg = (
-                f"Positional arguments ({args}) are deprecated as of version 0.3.0 and "
-                f"will be removed no sooner than 3 months after the release. Instead use "
-                f"keyword arguments."
-            )
-            warnings.warn(msg, DeprecationWarning, stacklevel=2)
-
         if "kernel" in kwargs:
             msg = (
                 "'kernel' argument is not supported and will be discarded, "
@@ -64,20 +58,20 @@ class QSVC(SVC):
             # if we don't delete, then this value clashes with our quantum kernel
             del kwargs["kernel"]
 
-        self._quantum_kernel = quantum_kernel if quantum_kernel else QuantumKernel()
+        self._quantum_kernel = quantum_kernel if quantum_kernel else FidelityQuantumKernel()
 
         if "random_state" not in kwargs:
             kwargs["random_state"] = algorithm_globals.random_seed
 
-        super().__init__(kernel=self._quantum_kernel.evaluate, *args, **kwargs)
+        super().__init__(kernel=self._quantum_kernel.evaluate, **kwargs)
 
     @property
-    def quantum_kernel(self) -> QuantumKernel:
+    def quantum_kernel(self) -> BaseKernel:
         """Returns quantum kernel"""
         return self._quantum_kernel
 
     @quantum_kernel.setter
-    def quantum_kernel(self, quantum_kernel: QuantumKernel):
+    def quantum_kernel(self, quantum_kernel: BaseKernel):
         """Sets quantum kernel"""
         self._quantum_kernel = quantum_kernel
         self.kernel = self._quantum_kernel.evaluate
